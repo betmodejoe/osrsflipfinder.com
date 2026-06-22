@@ -42,16 +42,4 @@ public interface FlipFinderSyncConfig extends Config
 	{
 		return true;
 	}
-
-	@ConfigItem(
-		keyName = "syncExistingOnLogin",
-		name = "Sync existing offers on login",
-		description = "Also report offers that were already in progress when you logged in. "
-			+ "Off by default to avoid re-reporting old fills.",
-		position = 4
-	)
-	default boolean syncExistingOnLogin()
-	{
-		return false;
-	}
 }

@@ -33,8 +33,6 @@ import net.runelite.client.ui.NavigationButton;
 public class FlipFinderSyncPlugin extends Plugin
 {
 	private static final int SLOTS = 8;
-	/** Offer events fired within this many ticks of login are the initial snapshot. */
-	private static final int LOGIN_BURST_TICKS = 2;
 
 	@Inject
 	private Client client;
@@ -55,7 +53,6 @@ public class FlipFinderSyncPlugin extends Plugin
 	private final long[] lastQtySold = new long[SLOTS];
 	private final long[] lastSpent = new long[SLOTS];
 
-	private int lastLoginTick = -100;
 	private int sessionCount;
 
 	private FlipFinderSyncPanel panel;
@@ -95,13 +92,10 @@ public class FlipFinderSyncPlugin extends Plugin
 	public void onGameStateChanged(GameStateChanged event)
 	{
 		final GameState state = event.getGameState();
-		if (state == GameState.LOGGED_IN)
+		if (state == GameState.LOGIN_SCREEN || state == GameState.HOPPING)
 		{
-			lastLoginTick = client.getTickCount();
-		}
-		else if (state == GameState.LOGIN_SCREEN || state == GameState.HOPPING)
-		{
-			// New account / world hop — drop baselines; login burst re-seeds them.
+			// New account / world hop — drop baselines. Cumulative buy upserts and
+			// deduped sell ids reconcile the current offer state after re-login.
 			resetBaselines();
 		}
 	}
@@ -146,7 +140,7 @@ public class FlipFinderSyncPlugin extends Plugin
 		final long qtyDelta = qtySold - prevQty;
 		if (qtyDelta <= 0)
 		{
-			return; // price-only change, or a freshly-placed (unfilled) offer
+			return; // price-only change, or no newly-filled units since last event
 		}
 
 		if (!config.enableSync())
@@ -154,38 +148,39 @@ public class FlipFinderSyncPlugin extends Plugin
 			return;
 		}
 
-		final boolean loginBurst =
-			client.getTickCount() <= lastLoginTick + LOGIN_BURST_TICKS;
-		if (loginBurst && !config.syncExistingOnLogin())
-		{
-			return; // initial snapshot of in-progress offers, not a new fill
-		}
-
-		final String type = isSell(state) ? "sell" : "buy";
-		final long spentDelta = Math.max(0, spent - prevSpent);
-		final long avgPrice = qtyDelta > 0 ? spentDelta / qtyDelta : offer.getPrice();
-
 		final int itemId = offer.getItemId();
 		final String itemName = itemName(itemId);
 		final long accountHash = client.getAccountHash();
+		final long txAt = System.currentTimeMillis();
 
-		// Deterministic id: re-observing the same cumulative state (e.g. after a
-		// relog) re-derives the same id, and the server dedupes on it.
-		final String clientTxId =
-			accountHash + ":" + slot + ":" + type + ":" + itemId + ":" + qtySold;
+		final GeSyncTx tx;
+		final String summary;
+		if (isSell(state))
+		{
+			// Sells are reported as deltas and FIFO-blended into open positions
+			// server-side. Deterministic id (cumulative sold) → re-observing the
+			// same fill after a relog re-derives the id and the server dedupes it.
+			final long spentDelta = Math.max(0, spent - prevSpent);
+			final long avgPrice = spentDelta / qtyDelta;
+			final String clientTxId =
+				accountHash + ":" + slot + ":sell:" + itemId + ":" + qtySold;
+			tx = GeSyncTx.sell(clientTxId, itemId, itemName, (int) qtyDelta, avgPrice, txAt);
+			summary = "sold " + itemName + " ×" + qtyDelta;
+		}
+		else
+		{
+			// Buys are reported cumulatively and upserted into ONE growing position.
+			// offerKey is stable across relogs (an offer's params don't change once
+			// placed), so re-sends reconcile rather than duplicate.
+			final long avgPrice = qtySold > 0 ? spent / qtySold : offer.getPrice();
+			final int target = offer.getTotalQuantity();
+			final String offerKey =
+				accountHash + ":" + slot + ":" + itemId + ":" + offer.getPrice() + ":" + target;
+			tx = GeSyncTx.buy(offerKey, itemId, itemName, (int) qtySold, target, avgPrice, txAt);
+			summary = "bought " + itemName + " " + qtySold + "/" + target;
+		}
 
-		final long filledQty = qtyDelta;
-		final GeFill fill = new GeFill(
-			clientTxId,
-			type,
-			itemId,
-			itemName,
-			avgPrice,
-			(int) filledQty,
-			System.currentTimeMillis()
-		);
-
-		api.submit(config.baseUrl(), config.apiKey(), Collections.singletonList(fill),
+		api.submit(config.baseUrl(), config.apiKey(), Collections.singletonList(tx),
 			(ok, message) ->
 			{
 				if (panel == null)
@@ -196,7 +191,7 @@ public class FlipFinderSyncPlugin extends Plugin
 				{
 					sessionCount++;
 					panel.setSessionCount(sessionCount);
-					panel.setLastSync(itemName + " ×" + filledQty);
+					panel.setLastSync(summary);
 					panel.setStatus("Connected", ColorScheme.PROGRESS_COMPLETE_COLOR);
 				}
 				else

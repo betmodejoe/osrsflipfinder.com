@@ -54,16 +54,16 @@ public class FlipFinderApiClient
 	/** Wrapper so the JSON body is { "transactions": [...] } as the server expects. */
 	private static final class Payload
 	{
-		final List<GeFill> transactions;
+		final List<GeSyncTx> transactions;
 
-		Payload(List<GeFill> transactions)
+		Payload(List<GeSyncTx> transactions)
 		{
 			this.transactions = transactions;
 		}
 	}
 
-	/** POST a batch of fills to /api/sync/trades. */
-	public void submit(String baseUrl, String apiKey, List<GeFill> fills, ResultCallback cb)
+	/** POST a batch of GE updates to /api/sync/trades. */
+	public void submit(String baseUrl, String apiKey, List<GeSyncTx> fills, ResultCallback cb)
 	{
 		final String base = normalizeBase(baseUrl);
 		if (base.isEmpty() || apiKey == null || apiKey.trim().isEmpty())
