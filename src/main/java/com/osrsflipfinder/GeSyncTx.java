@@ -28,21 +28,30 @@ public class GeSyncTx
 	int filled;         // buys: cumulative quantity bought so far
 	int target;         // buys: the offer's total quantity
 	long txAt;
+	Boolean active;     // sell-listed: true when a sell offer is live, else false
 
 	static GeSyncTx buy(String offerKey, int itemId, String itemName,
 		int filled, int target, long price, long txAt)
 	{
-		return new GeSyncTx("buy", offerKey, null, itemId, itemName, price, 0, filled, target, txAt);
+		return new GeSyncTx("buy", offerKey, null, itemId, itemName, price, 0, filled, target, txAt, null);
 	}
 
 	static GeSyncTx sell(String clientTxId, int itemId, String itemName,
 		int qty, long price, long txAt)
 	{
-		return new GeSyncTx("sell", null, clientTxId, itemId, itemName, price, qty, 0, 0, txAt);
+		return new GeSyncTx("sell", null, clientTxId, itemId, itemName, price, qty, 0, 0, txAt, null);
 	}
 
 	static GeSyncTx buyCancel(String offerKey, int itemId, String itemName, long txAt)
 	{
-		return new GeSyncTx("buy-cancel", offerKey, null, itemId, itemName, 0, 0, 0, 0, txAt);
+		return new GeSyncTx("buy-cancel", offerKey, null, itemId, itemName, 0, 0, 0, 0, txAt, null);
+	}
+
+	// A sell offer's listed-state: active when one is live on the GE (even at 0
+	// sold), inactive when cancelled/collected. Lets a bought position show
+	// "selling 0 / Y" instead of "holding".
+	static GeSyncTx sellListed(int itemId, String itemName, boolean active, long price, long txAt)
+	{
+		return new GeSyncTx("sell-listed", null, null, itemId, itemName, price, 0, 0, 0, txAt, active);
 	}
 }

@@ -52,6 +52,10 @@ public class FlipFinderSyncPlugin extends Plugin
 	// Per-slot offerKey we last reported a BUY for, so a freshly-placed offer is
 	// reported once (as "buying 0/target") without re-sending on every tick.
 	private final String[] lastBuyOfferKey = new String[SLOTS];
+	// Per-slot SELL-offer listed state, so a placed sell shows "selling" before any
+	// unit sells. The item is remembered so the clear can name it after collect.
+	private final boolean[] sellListed = new boolean[SLOTS];
+	private final int[] sellListedItem = new int[SLOTS];
 
 	private int sessionCount;
 
@@ -131,10 +135,17 @@ public class FlipFinderSyncPlugin extends Plugin
 		if (state == GrandExchangeOfferState.EMPTY)
 		{
 			// Offer collected / cleared — reset so the next offer in this slot
-			// starts from zero.
+			// starts from zero. If a sell was still flagged listed, clear it —
+			// naming the remembered item, since the offer's id is now gone.
+			if (config.enableSync() && sellListed[slot])
+			{
+				submitListing(sellListedItem[slot], false, 0, System.currentTimeMillis());
+			}
 			lastQtySold[slot] = 0;
 			lastSpent[slot] = 0;
 			lastBuyOfferKey[slot] = null;
+			sellListed[slot] = false;
+			sellListedItem[slot] = 0;
 			return;
 		}
 
@@ -179,6 +190,25 @@ public class FlipFinderSyncPlugin extends Plugin
 		final int itemId = offer.getItemId();
 		final long accountHash = client.getAccountHash();
 		final long txAt = System.currentTimeMillis();
+
+		// Sell-offer listed lifecycle — report "selling" the moment a sell offer is
+		// placed (even at 0 sold) and clear it on cancel or full sale. Sent as its
+		// own update so it fires even when no units filled this event.
+		if (sell)
+		{
+			if (state == GrandExchangeOfferState.SELLING && !sellListed[slot])
+			{
+				sellListed[slot] = true;
+				sellListedItem[slot] = itemId;
+				submitListing(itemId, true, offer.getPrice(), txAt);
+			}
+			else if ((state == GrandExchangeOfferState.CANCELLED_SELL
+				|| state == GrandExchangeOfferState.SOLD) && sellListed[slot])
+			{
+				sellListed[slot] = false;
+				submitListing(itemId, false, offer.getPrice(), txAt);
+			}
+		}
 
 		final GeSyncTx tx;
 		final String summary;
@@ -248,6 +278,20 @@ public class FlipFinderSyncPlugin extends Plugin
 			});
 	}
 
+	/** Report a sell offer's listed-state on its own (fires even at 0 sold). */
+	private void submitListing(int itemId, boolean active, long price, long txAt)
+	{
+		final GeSyncTx tx = GeSyncTx.sellListed(itemId, itemName(itemId), active, price, txAt);
+		api.submit(config.baseUrl(), config.apiKey(), Collections.singletonList(tx),
+			(ok, message) ->
+			{
+				if (panel != null && !ok)
+				{
+					panel.setStatus("Sync failed: " + message, ColorScheme.PROGRESS_ERROR_COLOR);
+				}
+			});
+	}
+
 	private void testConnection()
 	{
 		if (panel != null)
@@ -293,6 +337,8 @@ public class FlipFinderSyncPlugin extends Plugin
 			lastQtySold[i] = 0;
 			lastSpent[i] = 0;
 			lastBuyOfferKey[i] = null;
+			sellListed[i] = false;
+			sellListedItem[i] = 0;
 		}
 	}
 
