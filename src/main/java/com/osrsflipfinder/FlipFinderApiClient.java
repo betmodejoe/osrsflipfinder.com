@@ -3,6 +3,7 @@ package com.osrsflipfinder;
 import com.google.gson.Gson;
 import java.io.IOException;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import lombok.extern.slf4j.Slf4j;
@@ -31,7 +32,16 @@ public class FlipFinderApiClient
 	@Inject
 	private FlipFinderApiClient(OkHttpClient okHttpClient, Gson gson)
 	{
-		this.okHttpClient = okHttpClient;
+		// Reuse RuneLite's shared connection pool/dispatcher but extend the
+		// timeouts: the ingest API is serverless and a cold start can take well
+		// over the default ~10s read timeout, which surfaced as
+		// "Sync failed: timeout". A 35s overall cap lets a cold start complete.
+		this.okHttpClient = okHttpClient.newBuilder()
+			.connectTimeout(15, TimeUnit.SECONDS)
+			.readTimeout(30, TimeUnit.SECONDS)
+			.writeTimeout(15, TimeUnit.SECONDS)
+			.callTimeout(35, TimeUnit.SECONDS)
+			.build();
 		this.gson = gson;
 	}
 
