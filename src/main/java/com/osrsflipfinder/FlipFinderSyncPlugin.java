@@ -1,10 +1,6 @@
 package com.osrsflipfinder;
 
 import com.google.inject.Provides;
-import java.awt.Color;
-import java.awt.Font;
-import java.awt.Graphics2D;
-import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
 import java.util.Collections;
 import javax.inject.Inject;
@@ -23,6 +19,7 @@ import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.ui.NavigationButton;
+import net.runelite.client.util.ImageUtil;
 
 @Slf4j
 @PluginDescriptor(
@@ -251,18 +248,9 @@ public class FlipFinderSyncPlugin extends Plugin
 		}
 	}
 
-	/** A small gold "F" tile, drawn so we don't ship a binary icon resource. */
+	/** The OSRS coins (gp stack) icon — the same item sprite the website uses. */
 	private static BufferedImage icon()
 	{
-		final BufferedImage img = new BufferedImage(24, 24, BufferedImage.TYPE_INT_ARGB);
-		final Graphics2D g = img.createGraphics();
-		g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-		g.setColor(new Color(0xC8, 0x9B, 0x3C));
-		g.fillRoundRect(1, 1, 22, 22, 6, 6);
-		g.setColor(new Color(0x1B, 0x1B, 0x1B));
-		g.setFont(new Font("SansSerif", Font.BOLD, 16));
-		g.drawString("F", 7, 18);
-		g.dispose();
-		return img;
+		return ImageUtil.loadImageResource(FlipFinderSyncPlugin.class, "coins.png");
 	}
 }
