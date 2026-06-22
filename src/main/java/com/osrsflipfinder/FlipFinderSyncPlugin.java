@@ -49,6 +49,9 @@ public class FlipFinderSyncPlugin extends Plugin
 	// Per-slot cumulative state, so each event yields only the newly-filled delta.
 	private final long[] lastQtySold = new long[SLOTS];
 	private final long[] lastSpent = new long[SLOTS];
+	// Per-slot offerKey we last reported a BUY for, so a freshly-placed offer is
+	// reported once (as "buying 0/target") without re-sending on every tick.
+	private final String[] lastBuyOfferKey = new String[SLOTS];
 
 	private int sessionCount;
 
@@ -131,32 +134,34 @@ public class FlipFinderSyncPlugin extends Plugin
 			// starts from zero.
 			lastQtySold[slot] = 0;
 			lastSpent[slot] = 0;
+			lastBuyOfferKey[slot] = null;
 			return;
 		}
 
 		final long qtyDelta = qtySold - prevQty;
-		if (qtyDelta <= 0)
-		{
-			return; // price-only change, or no newly-filled units since last event
-		}
 
 		if (!config.enableSync())
 		{
 			return;
 		}
 
+		final boolean sell = isSell(state);
 		final int itemId = offer.getItemId();
-		final String itemName = itemName(itemId);
 		final long accountHash = client.getAccountHash();
 		final long txAt = System.currentTimeMillis();
 
 		final GeSyncTx tx;
 		final String summary;
-		if (isSell(state))
+		if (sell)
 		{
+			if (qtyDelta <= 0)
+			{
+				return; // sells are reported only when units actually fill
+			}
 			// Sells are reported as deltas and FIFO-blended into open positions
 			// server-side. Deterministic id (cumulative sold) → re-observing the
 			// same fill after a relog re-derives the id and the server dedupes it.
+			final String itemName = itemName(itemId);
 			final long spentDelta = Math.max(0, spent - prevSpent);
 			final long avgPrice = spentDelta / qtyDelta;
 			final String clientTxId =
@@ -176,6 +181,18 @@ public class FlipFinderSyncPlugin extends Plugin
 			final int target = offer.getTotalQuantity();
 			final String offerKey =
 				accountHash + ":" + slot + ":" + itemId + ":" + buyPrice + ":" + target;
+
+			// Report the moment the offer is placed — so it shows as "buying
+			// 0/target" before anything fills — and again on every new fill. Skip
+			// redundant price-only events for an offer we've already reported.
+			final boolean newOffer = !offerKey.equals(lastBuyOfferKey[slot]);
+			if (qtyDelta <= 0 && !newOffer)
+			{
+				return;
+			}
+			lastBuyOfferKey[slot] = offerKey;
+
+			final String itemName = itemName(itemId);
 			tx = GeSyncTx.buy(offerKey, itemId, itemName, (int) qtySold, target, buyPrice, txAt);
 			summary = "bought " + itemName + " " + qtySold + "/" + target;
 		}
@@ -245,6 +262,7 @@ public class FlipFinderSyncPlugin extends Plugin
 		{
 			lastQtySold[i] = 0;
 			lastSpent[i] = 0;
+			lastBuyOfferKey[i] = null;
 		}
 	}
 
