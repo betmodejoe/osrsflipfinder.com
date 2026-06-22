@@ -1,0 +1,64 @@
+/*
+ * Build for the "Flip Finder Sync" RuneLite plugin. Mirrors the official
+ * runelite/example-plugin template: compileOnly RuneLite client, Lombok, and a
+ * `run` task that boots a dev client with this plugin sideloaded.
+ */
+plugins {
+    id 'java'
+}
+
+repositories {
+    mavenLocal()
+    maven {
+        url = 'https://repo.runelite.net'
+        content {
+            includeGroupByRegex 'net\\.runelite.*'
+        }
+    }
+    mavenCentral()
+}
+
+def runeLiteVersion = 'latest.release'
+
+dependencies {
+    compileOnly group: 'net.runelite', name: 'client', version: runeLiteVersion
+
+    compileOnly 'org.projectlombok:lombok:1.18.30'
+    annotationProcessor 'org.projectlombok:lombok:1.18.30'
+
+    testImplementation group: 'net.runelite', name: 'client', version: runeLiteVersion
+    testImplementation group: 'net.runelite', name: 'jshell', version: runeLiteVersion
+    testImplementation 'junit:junit:4.13.2'
+}
+
+group = 'com.osrsflipfinder'
+version = '1.0.0'
+
+tasks.withType(JavaCompile) {
+    options.encoding = 'UTF-8'
+    options.release.set(11)
+}
+
+jar {
+    manifest {
+        attributes(
+            'Implementation-Title': project.name,
+            'Implementation-Version': project.version
+        )
+    }
+}
+
+// Uber-jar for local/manual sideloading (Plugin Hub builds this for you).
+tasks.register('shadowJar', Jar) {
+    from sourceSets.main.output, sourceSets.test.output
+    configurations = [project.configurations.testRuntimeClasspath]
+    archiveClassifier = 'all'
+    exclude 'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA', 'module-info.class'
+}
+
+// `./gradlew run` boots a developer-mode RuneLite client with the plugin loaded.
+tasks.register('run', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.osrsflipfinder.FlipFinderSyncPluginTest'
+    args = ['--developer-mode', '--debug']
+}

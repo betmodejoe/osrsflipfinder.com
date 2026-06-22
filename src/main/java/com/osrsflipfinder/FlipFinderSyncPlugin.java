@@ -1,0 +1,270 @@
+package com.osrsflipfinder;
+
+import com.google.inject.Provides;
+import java.awt.Color;
+import java.awt.Font;
+import java.awt.Graphics2D;
+import java.awt.RenderingHints;
+import java.awt.image.BufferedImage;
+import java.util.Collections;
+import javax.inject.Inject;
+import lombok.extern.slf4j.Slf4j;
+import net.runelite.api.Client;
+import net.runelite.api.GameState;
+import net.runelite.api.GrandExchangeOffer;
+import net.runelite.api.GrandExchangeOfferState;
+import net.runelite.api.events.GameStateChanged;
+import net.runelite.api.events.GrandExchangeOfferChanged;
+import net.runelite.client.config.ConfigManager;
+import net.runelite.client.eventbus.Subscribe;
+import net.runelite.client.game.ItemManager;
+import net.runelite.client.plugins.Plugin;
+import net.runelite.client.plugins.PluginDescriptor;
+import net.runelite.client.ui.ClientToolbar;
+import net.runelite.client.ui.ColorScheme;
+import net.runelite.client.ui.NavigationButton;
+
+@Slf4j
+@PluginDescriptor(
+	name = "Flip Finder Sync",
+	description = "Syncs your Grand Exchange trades to OSRS Flip Finder",
+	tags = {"grand", "exchange", "flipping", "flip", "finder", "trade", "journal", "profit", "merch"}
+)
+public class FlipFinderSyncPlugin extends Plugin
+{
+	private static final int SLOTS = 8;
+	/** Offer events fired within this many ticks of login are the initial snapshot. */
+	private static final int LOGIN_BURST_TICKS = 2;
+
+	@Inject
+	private Client client;
+
+	@Inject
+	private FlipFinderSyncConfig config;
+
+	@Inject
+	private ItemManager itemManager;
+
+	@Inject
+	private FlipFinderApiClient api;
+
+	@Inject
+	private ClientToolbar clientToolbar;
+
+	// Per-slot cumulative state, so each event yields only the newly-filled delta.
+	private final long[] lastQtySold = new long[SLOTS];
+	private final long[] lastSpent = new long[SLOTS];
+
+	private int lastLoginTick = -100;
+	private int sessionCount;
+
+	private FlipFinderSyncPanel panel;
+	private NavigationButton navButton;
+
+	@Provides
+	FlipFinderSyncConfig provideConfig(ConfigManager configManager)
+	{
+		return configManager.getConfig(FlipFinderSyncConfig.class);
+	}
+
+	@Override
+	protected void startUp()
+	{
+		resetBaselines();
+		sessionCount = 0;
+		panel = new FlipFinderSyncPanel(this::testConnection);
+		navButton = NavigationButton.builder()
+			.tooltip("Flip Finder Sync")
+			.icon(icon())
+			.priority(8)
+			.panel(panel)
+			.build();
+		clientToolbar.addNavigation(navButton);
+		log.debug("Flip Finder Sync started");
+	}
+
+	@Override
+	protected void shutDown()
+	{
+		clientToolbar.removeNavigation(navButton);
+		panel = null;
+		navButton = null;
+	}
+
+	@Subscribe
+	public void onGameStateChanged(GameStateChanged event)
+	{
+		final GameState state = event.getGameState();
+		if (state == GameState.LOGGED_IN)
+		{
+			lastLoginTick = client.getTickCount();
+		}
+		else if (state == GameState.LOGIN_SCREEN || state == GameState.HOPPING)
+		{
+			// New account / world hop — drop baselines; login burst re-seeds them.
+			resetBaselines();
+		}
+	}
+
+	@Subscribe
+	public void onGrandExchangeOfferChanged(GrandExchangeOfferChanged event)
+	{
+		final int slot = event.getSlot();
+		final GrandExchangeOffer offer = event.getOffer();
+		if (slot < 0 || slot >= SLOTS || offer == null)
+		{
+			return;
+		}
+
+		final GrandExchangeOfferState state = offer.getState();
+
+		// Mirror RuneLite's own GE plugin: ignore the EMPTY burst fired on logout.
+		if (state == GrandExchangeOfferState.EMPTY
+			&& client.getGameState() != GameState.LOGGED_IN)
+		{
+			return;
+		}
+
+		final long qtySold = offer.getQuantitySold();
+		final long spent = offer.getSpent();
+		final long prevQty = lastQtySold[slot];
+		final long prevSpent = lastSpent[slot];
+
+		// Advance the baseline to the current cumulative state.
+		lastQtySold[slot] = qtySold;
+		lastSpent[slot] = spent;
+
+		if (state == GrandExchangeOfferState.EMPTY)
+		{
+			// Offer collected / cleared — reset so the next offer in this slot
+			// starts from zero.
+			lastQtySold[slot] = 0;
+			lastSpent[slot] = 0;
+			return;
+		}
+
+		final long qtyDelta = qtySold - prevQty;
+		if (qtyDelta <= 0)
+		{
+			return; // price-only change, or a freshly-placed (unfilled) offer
+		}
+
+		if (!config.enableSync())
+		{
+			return;
+		}
+
+		final boolean loginBurst =
+			client.getTickCount() <= lastLoginTick + LOGIN_BURST_TICKS;
+		if (loginBurst && !config.syncExistingOnLogin())
+		{
+			return; // initial snapshot of in-progress offers, not a new fill
+		}
+
+		final String type = isSell(state) ? "sell" : "buy";
+		final long spentDelta = Math.max(0, spent - prevSpent);
+		final long avgPrice = qtyDelta > 0 ? spentDelta / qtyDelta : offer.getPrice();
+
+		final int itemId = offer.getItemId();
+		final String itemName = itemName(itemId);
+		final long accountHash = client.getAccountHash();
+
+		// Deterministic id: re-observing the same cumulative state (e.g. after a
+		// relog) re-derives the same id, and the server dedupes on it.
+		final String clientTxId =
+			accountHash + ":" + slot + ":" + type + ":" + itemId + ":" + qtySold;
+
+		final long filledQty = qtyDelta;
+		final GeFill fill = new GeFill(
+			clientTxId,
+			type,
+			itemId,
+			itemName,
+			avgPrice,
+			(int) filledQty,
+			System.currentTimeMillis()
+		);
+
+		api.submit(config.baseUrl(), config.apiKey(), Collections.singletonList(fill),
+			(ok, message) ->
+			{
+				if (panel == null)
+				{
+					return;
+				}
+				if (ok)
+				{
+					sessionCount++;
+					panel.setSessionCount(sessionCount);
+					panel.setLastSync(itemName + " ×" + filledQty);
+					panel.setStatus("Connected", ColorScheme.PROGRESS_COMPLETE_COLOR);
+				}
+				else
+				{
+					panel.setStatus("Sync failed: " + message, ColorScheme.PROGRESS_ERROR_COLOR);
+				}
+			});
+	}
+
+	private void testConnection()
+	{
+		if (panel != null)
+		{
+			panel.setStatus("Testing…", ColorScheme.LIGHT_GRAY_COLOR);
+			panel.setTestEnabled(false);
+		}
+		api.testConnection(config.baseUrl(), config.apiKey(), (ok, message) ->
+		{
+			if (panel != null)
+			{
+				panel.setStatus(message, ok
+					? ColorScheme.PROGRESS_COMPLETE_COLOR
+					: ColorScheme.PROGRESS_ERROR_COLOR);
+				panel.setTestEnabled(true);
+			}
+		});
+	}
+
+	private static boolean isSell(GrandExchangeOfferState state)
+	{
+		return state == GrandExchangeOfferState.SELLING
+			|| state == GrandExchangeOfferState.SOLD
+			|| state == GrandExchangeOfferState.CANCELLED_SELL;
+	}
+
+	private String itemName(int itemId)
+	{
+		try
+		{
+			return itemManager.getItemComposition(itemId).getName();
+		}
+		catch (Exception e)
+		{
+			return "Item " + itemId;
+		}
+	}
+
+	private void resetBaselines()
+	{
+		for (int i = 0; i < SLOTS; i++)
+		{
+			lastQtySold[i] = 0;
+			lastSpent[i] = 0;
+		}
+	}
+
+	/** A small gold "F" tile, drawn so we don't ship a binary icon resource. */
+	private static BufferedImage icon()
+	{
+		final BufferedImage img = new BufferedImage(24, 24, BufferedImage.TYPE_INT_ARGB);
+		final Graphics2D g = img.createGraphics();
+		g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+		g.setColor(new Color(0xC8, 0x9B, 0x3C));
+		g.fillRoundRect(1, 1, 22, 22, 6, 6);
+		g.setColor(new Color(0x1B, 0x1B, 0x1B));
+		g.setFont(new Font("SansSerif", Font.BOLD, 16));
+		g.drawString("F", 7, 18);
+		g.dispose();
+		return img;
+	}
+}
