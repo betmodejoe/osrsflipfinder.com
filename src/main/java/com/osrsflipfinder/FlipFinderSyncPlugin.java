@@ -169,14 +169,17 @@ public class FlipFinderSyncPlugin extends Plugin
 		}
 		else
 		{
-			// Buys are reported cumulatively and upserted into ONE growing position.
-			// offerKey is stable across relogs (an offer's params don't change once
-			// placed), so re-sends reconcile rather than duplicate.
-			final long avgPrice = qtySold > 0 ? spent / qtySold : offer.getPrice();
+			// Buys are reported cumulatively and accumulated server-side into one
+			// growing position. We send the offer's LISTED price (not the average
+			// paid) so it matches the price a user types into a manual journal
+			// entry, letting the server merge into it instead of duplicating.
+			// offerKey is stable across relogs (offer params don't change once
+			// placed), so re-sends reconcile rather than double-count.
+			final long buyPrice = offer.getPrice();
 			final int target = offer.getTotalQuantity();
 			final String offerKey =
-				accountHash + ":" + slot + ":" + itemId + ":" + offer.getPrice() + ":" + target;
-			tx = GeSyncTx.buy(offerKey, itemId, itemName, (int) qtySold, target, avgPrice, txAt);
+				accountHash + ":" + slot + ":" + itemId + ":" + buyPrice + ":" + target;
+			tx = GeSyncTx.buy(offerKey, itemId, itemName, (int) qtySold, target, buyPrice, txAt);
 			summary = "bought " + itemName + " " + qtySold + "/" + target;
 		}
 
