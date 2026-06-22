@@ -12,6 +12,8 @@ import lombok.Value;
  *                   {@code target}).
  *  - {@code sell} — a newly-filled delta ({@code qty}) deduped by
  *                   {@code clientTxId} and FIFO-blended into open positions.
+ *  - {@code buyCancel} — an offer cancelled before anything filled; the server
+ *                   removes the placeholder "buying 0/target" position.
  */
 @Value
 public class GeSyncTx
@@ -37,5 +39,10 @@ public class GeSyncTx
 		int qty, long price, long txAt)
 	{
 		return new GeSyncTx("sell", null, clientTxId, itemId, itemName, price, qty, 0, 0, txAt);
+	}
+
+	static GeSyncTx buyCancel(String offerKey, int itemId, String itemName, long txAt)
+	{
+		return new GeSyncTx("buy-cancel", offerKey, null, itemId, itemName, 0, 0, 0, 0, txAt);
 	}
 }

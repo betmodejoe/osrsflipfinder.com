@@ -138,6 +138,36 @@ public class FlipFinderSyncPlugin extends Plugin
 			return;
 		}
 
+		// A buy cancelled before any unit filled leaves a placeholder
+		// "buying 0/target" position server-side — signal its removal. A
+		// partially-filled buy that's cancelled keeps its bought units, so only
+		// act when nothing was bought.
+		if (state == GrandExchangeOfferState.CANCELLED_BUY && qtySold == 0)
+		{
+			lastBuyOfferKey[slot] = null;
+			if (!config.enableSync())
+			{
+				return;
+			}
+			final int cancelItemId = offer.getItemId();
+			final long accountHash = client.getAccountHash();
+			final long buyPrice = offer.getPrice();
+			final int target = offer.getTotalQuantity();
+			final String offerKey =
+				accountHash + ":" + slot + ":" + cancelItemId + ":" + buyPrice + ":" + target;
+			final GeSyncTx cancel = GeSyncTx.buyCancel(
+				offerKey, cancelItemId, itemName(cancelItemId), System.currentTimeMillis());
+			api.submit(config.baseUrl(), config.apiKey(), Collections.singletonList(cancel),
+				(ok, message) ->
+				{
+					if (panel != null && !ok)
+					{
+						panel.setStatus("Sync failed: " + message, ColorScheme.PROGRESS_ERROR_COLOR);
+					}
+				});
+			return;
+		}
+
 		final long qtyDelta = qtySold - prevQty;
 
 		if (!config.enableSync())
