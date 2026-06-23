@@ -24,6 +24,9 @@ import okhttp3.Response;
 @Singleton
 public class FlipFinderApiClient
 {
+	/** Production OSRS Flip Finder endpoint — fixed, not user-configurable. */
+	private static final String BASE_URL = "https://osrsflipfinder.com";
+
 	private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
 	private final OkHttpClient okHttpClient;
@@ -51,16 +54,6 @@ public class FlipFinderApiClient
 		void onResult(boolean ok, String message);
 	}
 
-	private static String normalizeBase(String baseUrl)
-	{
-		String b = baseUrl == null ? "" : baseUrl.trim();
-		while (b.endsWith("/"))
-		{
-			b = b.substring(0, b.length() - 1);
-		}
-		return b;
-	}
-
 	/** Wrapper so the JSON body is { "transactions": [...] } as the server expects. */
 	private static final class Payload
 	{
@@ -73,18 +66,17 @@ public class FlipFinderApiClient
 	}
 
 	/** POST a batch of GE updates to /api/sync/trades. */
-	public void submit(String baseUrl, String apiKey, List<GeSyncTx> fills, ResultCallback cb)
+	public void submit(String apiKey, List<GeSyncTx> fills, ResultCallback cb)
 	{
-		final String base = normalizeBase(baseUrl);
-		if (base.isEmpty() || apiKey == null || apiKey.trim().isEmpty())
+		if (apiKey == null || apiKey.trim().isEmpty())
 		{
-			cb.onResult(false, "Base URL or API key not set");
+			cb.onResult(false, "API key not set");
 			return;
 		}
 
 		final String json = gson.toJson(new Payload(fills));
 		final Request request = new Request.Builder()
-			.url(base + "/api/sync/trades")
+			.url(BASE_URL + "/api/sync/trades")
 			.header("Authorization", "Bearer " + apiKey.trim())
 			.post(RequestBody.create(JSON, json))
 			.build();
@@ -110,17 +102,16 @@ public class FlipFinderApiClient
 	}
 
 	/** GET /api/sync/me to verify the key (the "Test connection" button). */
-	public void testConnection(String baseUrl, String apiKey, ResultCallback cb)
+	public void testConnection(String apiKey, ResultCallback cb)
 	{
-		final String base = normalizeBase(baseUrl);
-		if (base.isEmpty() || apiKey == null || apiKey.trim().isEmpty())
+		if (apiKey == null || apiKey.trim().isEmpty())
 		{
-			cb.onResult(false, "Set the Base URL and API key first");
+			cb.onResult(false, "Set your API key first");
 			return;
 		}
 
 		final Request request = new Request.Builder()
-			.url(base + "/api/sync/me")
+			.url(BASE_URL + "/api/sync/me")
 			.header("Authorization", "Bearer " + apiKey.trim())
 			.get()
 			.build();
@@ -130,7 +121,7 @@ public class FlipFinderApiClient
 			@Override
 			public void onFailure(Call call, IOException e)
 			{
-				cb.onResult(false, "Could not reach " + base);
+				cb.onResult(false, "Could not reach " + BASE_URL);
 			}
 
 			@Override

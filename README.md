@@ -14,9 +14,7 @@ location, or anything else.
 1. Install **Flip Finder Sync** from the RuneLite Plugin Hub (or build it, below).
 2. Sign in at [osrsflipfinder.com](https://osrsflipfinder.com) → **Settings** →
    **Generate key**. The key is shown once — copy it.
-3. Open the plugin's config in RuneLite and set:
-   - **Base URL** — your OSRS Flip Finder URL (e.g. `https://osrsflipfinder.com`)
-   - **API key** — the key you just generated
+3. Open the plugin's config in RuneLite and paste the key into **API key**.
 4. Open the **Flip Finder Sync** side panel → **Test connection** → it should say
    **Connected**.
 
@@ -35,10 +33,11 @@ de-duplicated server-side, so trades are never double-counted.
 
 | Setting | Default | Notes |
 | --- | --- | --- |
-| Base URL | `http://localhost:3000` | Your OSRS Flip Finder URL, no trailing slash |
 | API key | _(empty)_ | From OSRS Flip Finder → Settings → API keys |
 | Enable sync | on | Master switch |
-| Sync existing offers on login | off | If on, re-reports offers already in progress at login |
+
+The endpoint (`https://osrsflipfinder.com`) is fixed in the plugin and is not
+user-configurable.
 
 ## Building from source
 

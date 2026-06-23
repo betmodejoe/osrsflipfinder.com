@@ -168,7 +168,7 @@ public class FlipFinderSyncPlugin extends Plugin
 				accountHash + ":" + slot + ":" + cancelItemId + ":" + buyPrice + ":" + target;
 			final GeSyncTx cancel = GeSyncTx.buyCancel(
 				offerKey, cancelItemId, itemName(cancelItemId), System.currentTimeMillis());
-			api.submit(config.baseUrl(), config.apiKey(), Collections.singletonList(cancel),
+			api.submit(config.apiKey(), Collections.singletonList(cancel),
 				(ok, message) ->
 				{
 					if (panel != null && !ok)
@@ -257,7 +257,7 @@ public class FlipFinderSyncPlugin extends Plugin
 			summary = "bought " + itemName + " " + qtySold + "/" + target;
 		}
 
-		api.submit(config.baseUrl(), config.apiKey(), Collections.singletonList(tx),
+		api.submit(config.apiKey(), Collections.singletonList(tx),
 			(ok, message) ->
 			{
 				if (panel == null)
@@ -282,7 +282,7 @@ public class FlipFinderSyncPlugin extends Plugin
 	private void submitListing(int itemId, boolean active, long price, long txAt)
 	{
 		final GeSyncTx tx = GeSyncTx.sellListed(itemId, itemName(itemId), active, price, txAt);
-		api.submit(config.baseUrl(), config.apiKey(), Collections.singletonList(tx),
+		api.submit(config.apiKey(), Collections.singletonList(tx),
 			(ok, message) ->
 			{
 				if (panel != null && !ok)
@@ -299,7 +299,7 @@ public class FlipFinderSyncPlugin extends Plugin
 			panel.setStatus("Testing…", ColorScheme.LIGHT_GRAY_COLOR);
 			panel.setTestEnabled(false);
 		}
-		api.testConnection(config.baseUrl(), config.apiKey(), (ok, message) ->
+		api.testConnection(config.apiKey(), (ok, message) ->
 		{
 			if (panel != null)
 			{

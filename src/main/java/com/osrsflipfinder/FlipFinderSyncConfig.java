@@ -10,22 +10,11 @@ public interface FlipFinderSyncConfig extends Config
 	String GROUP = "flipfindersync";
 
 	@ConfigItem(
-		keyName = "baseUrl",
-		name = "Base URL",
-		description = "Your OSRS Flip Finder URL, e.g. http://localhost:3000 (no trailing slash)",
-		position = 1
-	)
-	default String baseUrl()
-	{
-		return "http://localhost:3000";
-	}
-
-	@ConfigItem(
 		keyName = "apiKey",
 		name = "API key",
 		description = "The key from OSRS Flip Finder → Settings → API keys",
 		secret = true,
-		position = 2
+		position = 1
 	)
 	default String apiKey()
 	{
@@ -36,7 +25,7 @@ public interface FlipFinderSyncConfig extends Config
 		keyName = "enableSync",
 		name = "Enable sync",
 		description = "Master switch for sending Grand Exchange trades to OSRS Flip Finder",
-		position = 3
+		position = 2
 	)
 	default boolean enableSync()
 	{
