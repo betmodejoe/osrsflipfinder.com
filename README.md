@@ -15,8 +15,9 @@ location, or anything else.
 2. Sign in at [osrsflipfinder.com](https://osrsflipfinder.com) → **Settings** →
    **Generate key**. The key is shown once — copy it.
 3. Open the plugin's config in RuneLite and paste the key into **API key**.
-4. Open the **Flip Finder Sync** side panel → **Test connection** → it should say
-   **Connected**.
+4. The plugin **auto-connects** as soon as the key is set — open the **Flip Finder
+   Sync** side panel and it should already say **Connected** (the **Test
+   connection** button re-checks on demand).
 
 Now place offers on the Grand Exchange — they appear in your journal as you trade.
 

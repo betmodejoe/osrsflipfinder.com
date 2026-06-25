@@ -13,6 +13,7 @@ import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GrandExchangeOfferChanged;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
+import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.game.ItemManager;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
@@ -81,6 +82,12 @@ public class FlipFinderSyncPlugin extends Plugin
 			.panel(panel)
 			.build();
 		clientToolbar.addNavigation(navButton);
+		// Auto-connect: verify the configured key the moment the plugin loads, so
+		// the panel shows live connection status without a manual button click.
+		if (!config.apiKey().trim().isEmpty())
+		{
+			testConnection();
+		}
 		log.debug("Flip Finder Sync started");
 	}
 
@@ -90,6 +97,28 @@ public class FlipFinderSyncPlugin extends Plugin
 		clientToolbar.removeNavigation(navButton);
 		panel = null;
 		navButton = null;
+	}
+
+	@Subscribe
+	public void onConfigChanged(ConfigChanged event)
+	{
+		if (!FlipFinderSyncConfig.GROUP.equals(event.getGroup()))
+		{
+			return;
+		}
+		// Re-verify whenever the key changes, so pasting/clearing it updates the
+		// panel's connection status immediately.
+		if ("apiKey".equals(event.getKey()))
+		{
+			if (!config.apiKey().trim().isEmpty())
+			{
+				testConnection();
+			}
+			else if (panel != null)
+			{
+				panel.setStatus("Not connected", ColorScheme.LIGHT_GRAY_COLOR);
+			}
+		}
 	}
 
 	@Subscribe
