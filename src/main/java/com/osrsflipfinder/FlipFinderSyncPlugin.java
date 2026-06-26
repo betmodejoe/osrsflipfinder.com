@@ -25,8 +25,11 @@ import net.runelite.client.util.ImageUtil;
 @Slf4j
 @PluginDescriptor(
 	name = "Flip Finder Sync",
-	description = "Syncs your Grand Exchange trades to OSRS Flip Finder",
-	tags = {"grand", "exchange", "flipping", "flip", "finder", "trade", "journal", "profit", "merch"}
+	description = "Auto-sync your Grand Exchange flips, buys & sells to a profit journal",
+	tags = {
+		"ge", "flipping", "merch", "merchanting", "tracker", "profit",
+		"tax", "gp", "gold", "money", "margin", "journal"
+	}
 )
 public class FlipFinderSyncPlugin extends Plugin
 {
