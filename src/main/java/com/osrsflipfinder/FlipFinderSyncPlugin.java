@@ -2,7 +2,13 @@ package com.osrsflipfinder;
 
 import com.google.inject.Provides;
 import java.awt.image.BufferedImage;
+import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import javax.inject.Inject;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
@@ -11,12 +17,14 @@ import net.runelite.api.GrandExchangeOffer;
 import net.runelite.api.GrandExchangeOfferState;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GrandExchangeOfferChanged;
+import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.game.ItemManager;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
+import net.runelite.client.task.Schedule;
 import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.ui.NavigationButton;
@@ -50,6 +58,9 @@ public class FlipFinderSyncPlugin extends Plugin
 	@Inject
 	private ClientToolbar clientToolbar;
 
+	@Inject
+	private ClientThread clientThread;
+
 	// Per-slot cumulative state, so each event yields only the newly-filled delta.
 	private final long[] lastQtySold = new long[SLOTS];
 	private final long[] lastSpent = new long[SLOTS];
@@ -66,6 +77,15 @@ public class FlipFinderSyncPlugin extends Plugin
 	private FlipFinderSyncPanel panel;
 	private NavigationButton navButton;
 
+	// Suggestions: throttle + dedupe the /api/suggest polling, and cache the last
+	// response so an offer change can re-render the panel instantly (with cached
+	// prices) without waiting on the network. lastSuggestions is read on the
+	// client thread and written on the OkHttp callback thread, hence volatile.
+	private static final long SUGGEST_DEDUPE_WINDOW_MS = 8_000L;
+	private long lastSuggestFetchMs;
+	private Set<Integer> lastFetchedItemIds = Collections.emptySet();
+	private volatile Map<Integer, Suggestion> lastSuggestions = Collections.emptyMap();
+
 	@Provides
 	FlipFinderSyncConfig provideConfig(ConfigManager configManager)
 	{
@@ -77,7 +97,7 @@ public class FlipFinderSyncPlugin extends Plugin
 	{
 		resetBaselines();
 		sessionCount = 0;
-		panel = new FlipFinderSyncPanel(this::testConnection);
+		panel = new FlipFinderSyncPanel(this::testConnection, () -> refreshSuggestions(true));
 		navButton = NavigationButton.builder()
 			.tooltip("Flip Finder Sync")
 			.icon(icon())
@@ -91,6 +111,7 @@ public class FlipFinderSyncPlugin extends Plugin
 		{
 			testConnection();
 		}
+		refreshSuggestions(true);
 		log.debug("Flip Finder Sync started");
 	}
 
@@ -122,6 +143,12 @@ public class FlipFinderSyncPlugin extends Plugin
 				panel.setStatus("Not connected", ColorScheme.LIGHT_GRAY_COLOR);
 			}
 		}
+		// Re-pull suggestions when the key, the toggle, or the risk dial changes.
+		final String key = event.getKey();
+		if ("apiKey".equals(key) || "showSuggestions".equals(key) || "risk".equals(key))
+		{
+			refreshSuggestions(true);
+		}
 	}
 
 	@Subscribe
@@ -133,6 +160,13 @@ public class FlipFinderSyncPlugin extends Plugin
 			// New account / world hop — drop baselines. Cumulative buy upserts and
 			// deduped sell ids reconcile the current offer state after re-login.
 			resetBaselines();
+			// Clear the now-stale offer view; the post-login burst repopulates it.
+			lastFetchedItemIds = Collections.emptySet();
+			lastSuggestions = Collections.emptyMap();
+			if (panel != null)
+			{
+				panel.setSuggestions(Collections.emptyList());
+			}
 		}
 	}
 
@@ -154,6 +188,11 @@ public class FlipFinderSyncPlugin extends Plugin
 		{
 			return;
 		}
+
+		// Any offer change (placed, filled, cancelled, collected) can change the
+		// live-offer view, so refresh suggestions. Independent of the sync toggle
+		// and throttled inside refreshSuggestions.
+		refreshSuggestions(false);
 
 		final long qtySold = offer.getQuantitySold();
 		final long spent = offer.getSpent();
@@ -341,6 +380,137 @@ public class FlipFinderSyncPlugin extends Plugin
 				panel.setTestEnabled(true);
 			}
 		});
+	}
+
+	/** Periodic refresh so suggestions track moving prices even without an event. */
+	@Schedule(period = 25, unit = ChronoUnit.SECONDS, asynchronous = true)
+	public void scheduledSuggestRefresh()
+	{
+		refreshSuggestions(false);
+	}
+
+	/**
+	 * Refresh the live-offer suggestions. Only config is read here; the GE offers
+	 * are read on the client thread (this may run on a scheduler thread).
+	 * {@code force} bypasses the dedupe window (panel open / manual refresh / start).
+	 */
+	private void refreshSuggestions(boolean force)
+	{
+		if (panel == null || !config.showSuggestions())
+		{
+			return;
+		}
+		final String key = config.apiKey();
+		if (isBlank(key))
+		{
+			panel.setSuggestionsHint("Add your API key in the config to see price suggestions.");
+			return;
+		}
+		clientThread.invokeLater(() -> collectAndFetch(force, key));
+	}
+
+	/** Client-thread: snapshot the live offers, paint from cache, and fetch if due. */
+	private void collectAndFetch(boolean force, String key)
+	{
+		if (panel == null || client.getGameState() != GameState.LOGGED_IN)
+		{
+			return;
+		}
+		final GrandExchangeOffer[] offers = client.getGrandExchangeOffers();
+		if (offers == null)
+		{
+			return;
+		}
+
+		final List<OfferSuggestion> snapshot = new ArrayList<>();
+		final Set<Integer> ids = new LinkedHashSet<>();
+		for (final GrandExchangeOffer offer : offers)
+		{
+			if (offer == null)
+			{
+				continue;
+			}
+			final GrandExchangeOfferState state = offer.getState();
+			final int itemId = offer.getItemId();
+			if (!isActive(state) || itemId <= 0)
+			{
+				continue;
+			}
+			snapshot.add(new OfferSuggestion(itemId, itemName(itemId), isSell(state),
+				offer.getPrice(), offer.getTotalQuantity(), offer.getQuantitySold(),
+				lastSuggestions.get(itemId)));
+			ids.add(itemId);
+		}
+
+		if (snapshot.isEmpty())
+		{
+			lastFetchedItemIds = Collections.emptySet();
+			panel.setSuggestions(Collections.emptyList());
+			return;
+		}
+
+		// Paint immediately from cached prices so new offers / fills show at once.
+		panel.setSuggestions(snapshot);
+
+		// Throttle the network call: skip when the same item set was just fetched.
+		final long now = System.currentTimeMillis();
+		if (!force
+			&& now - lastSuggestFetchMs < SUGGEST_DEDUPE_WINDOW_MS
+			&& ids.equals(lastFetchedItemIds))
+		{
+			return;
+		}
+		lastSuggestFetchMs = now;
+		lastFetchedItemIds = ids;
+
+		final List<int[]> items = new ArrayList<>(snapshot.size());
+		for (final OfferSuggestion s : snapshot)
+		{
+			items.add(new int[]{s.itemId, s.offerPrice});
+		}
+
+		api.fetchSuggestions(key, items, config.risk() / 100.0,
+			new FlipFinderApiClient.SuggestionsCallback()
+			{
+				@Override
+				public void onSuccess(Map<Integer, Suggestion> byItemId)
+				{
+					lastSuggestions = byItemId;
+					if (panel == null)
+					{
+						return;
+					}
+					final List<OfferSuggestion> rows = new ArrayList<>(snapshot.size());
+					for (final OfferSuggestion s : snapshot)
+					{
+						rows.add(new OfferSuggestion(s.itemId, s.itemName, s.sell,
+							s.offerPrice, s.totalQty, s.qtySold, byItemId.get(s.itemId)));
+					}
+					panel.setSuggestions(rows);
+				}
+
+				@Override
+				public void onError(String message)
+				{
+					if (panel != null)
+					{
+						panel.setSuggestionsError(message);
+					}
+				}
+			});
+	}
+
+	/** An offer that occupies a slot we want to annotate (not empty/cancelled). */
+	private static boolean isActive(GrandExchangeOfferState state)
+	{
+		return state != GrandExchangeOfferState.EMPTY
+			&& state != GrandExchangeOfferState.CANCELLED_BUY
+			&& state != GrandExchangeOfferState.CANCELLED_SELL;
+	}
+
+	private static boolean isBlank(String s)
+	{
+		return s == null || s.trim().isEmpty();
 	}
 
 	private static boolean isSell(GrandExchangeOfferState state)

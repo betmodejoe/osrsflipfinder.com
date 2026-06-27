@@ -1,8 +1,13 @@
 package com.osrsflipfinder;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonSyntaxException;
 import java.io.IOException;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import javax.inject.Inject;
@@ -10,11 +15,13 @@ import javax.inject.Singleton;
 import lombok.extern.slf4j.Slf4j;
 import okhttp3.Call;
 import okhttp3.Callback;
+import okhttp3.HttpUrl;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
+import okhttp3.ResponseBody;
 
 /**
  * Thin async wrapper over RuneLite's shared OkHttp client for talking to the
@@ -72,6 +79,14 @@ public class FlipFinderApiClient
 		void onResult(boolean ok, String message);
 	}
 
+	/** Suggestions result (by item id), delivered on an OkHttp background thread. */
+	public interface SuggestionsCallback
+	{
+		void onSuccess(Map<Integer, Suggestion> byItemId);
+
+		void onError(String message);
+	}
+
 	/** Transport outcome: HTTP code (-1 when there was no response) and cause. */
 	private interface TransportCallback
 	{
@@ -87,6 +102,12 @@ public class FlipFinderApiClient
 		{
 			this.transactions = transactions;
 		}
+	}
+
+	/** Mirrors the per-item-id suggestions map returned by /api/suggest. */
+	private static final class SuggestResponse
+	{
+		Map<String, Suggestion> suggestions;
 	}
 
 	/** POST a batch of GE updates to /api/sync/trades. */
@@ -151,6 +172,120 @@ public class FlipFinderApiClient
 			else
 			{
 				cb.onResult(false, "HTTP " + code);
+			}
+		});
+	}
+
+	/**
+	 * GET /api/suggest for the items currently in the player's GE slots. Each entry
+	 * of {@code items} is {@code {itemId, offerPrice}}; the offer price lets the
+	 * server return the fill probability at that exact price. Results arrive by item
+	 * id on an OkHttp thread. A single attempt — the periodic refresh is the natural
+	 * retry, so a transient miss just shows briefly and clears on the next tick.
+	 */
+	public void fetchSuggestions(String apiKey, List<int[]> items, double risk, SuggestionsCallback cb)
+	{
+		if (apiKey == null || apiKey.trim().isEmpty())
+		{
+			cb.onError("API key not set");
+			return;
+		}
+		if (items == null || items.isEmpty())
+		{
+			cb.onSuccess(Collections.emptyMap());
+			return;
+		}
+
+		final StringBuilder itemsParam = new StringBuilder();
+		for (final int[] it : items)
+		{
+			if (it == null || it.length == 0 || it[0] <= 0)
+			{
+				continue;
+			}
+			if (itemsParam.length() > 0)
+			{
+				itemsParam.append(',');
+			}
+			itemsParam.append(it[0]);
+			if (it.length > 1 && it[1] > 0)
+			{
+				itemsParam.append(':').append(it[1]);
+			}
+		}
+		if (itemsParam.length() == 0)
+		{
+			cb.onSuccess(Collections.emptyMap());
+			return;
+		}
+
+		final HttpUrl endpoint = HttpUrl.parse(BASE_URL + "/api/suggest");
+		if (endpoint == null)
+		{
+			cb.onError("Bad URL");
+			return;
+		}
+		final double r = Math.max(0, Math.min(1, risk));
+		final HttpUrl url = endpoint.newBuilder()
+			.addQueryParameter("items", itemsParam.toString())
+			.addQueryParameter("risk", String.format(Locale.US, "%.3f", r))
+			.build();
+
+		final Request request = new Request.Builder()
+			.url(url)
+			.header("Authorization", "Bearer " + apiKey.trim())
+			.get()
+			.build();
+
+		okHttpClient.newCall(request).enqueue(new Callback()
+		{
+			@Override
+			public void onFailure(Call call, IOException e)
+			{
+				cb.onError("Could not reach " + BASE_URL);
+			}
+
+			@Override
+			public void onResponse(Call call, Response response)
+			{
+				try (Response res = response)
+				{
+					if (res.code() == 401)
+					{
+						cb.onError("Invalid API key");
+						return;
+					}
+					if (!res.isSuccessful())
+					{
+						cb.onError("HTTP " + res.code());
+						return;
+					}
+					final ResponseBody body = res.body();
+					final String json = body == null ? null : body.string();
+					final SuggestResponse decoded = json == null
+						? null
+						: gson.fromJson(json, SuggestResponse.class);
+					final Map<Integer, Suggestion> byId = new HashMap<>();
+					if (decoded != null && decoded.suggestions != null)
+					{
+						for (final Map.Entry<String, Suggestion> e : decoded.suggestions.entrySet())
+						{
+							try
+							{
+								byId.put(Integer.parseInt(e.getKey()), e.getValue());
+							}
+							catch (NumberFormatException ignored)
+							{
+								// Skip a non-numeric key; the server only emits ids.
+							}
+						}
+					}
+					cb.onSuccess(byId);
+				}
+				catch (IOException | JsonSyntaxException e)
+				{
+					cb.onError("Suggestions unavailable");
+				}
 			}
 		});
 	}
