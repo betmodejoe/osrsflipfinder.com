@@ -15,6 +15,7 @@ import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.SwingUtilities;
 import net.runelite.client.ui.ColorScheme;
+import net.runelite.client.ui.FontManager;
 import net.runelite.client.ui.PluginPanel;
 
 /**
@@ -185,7 +186,7 @@ class FlipFinderSyncPanel extends PluginPanel
 		});
 	}
 
-	/** One offer's card: identity, your-vs-model price, margin, fill/ETA, drift. */
+	/** One offer's card: identity, status, your-vs-model price, fill/ETA, margin, drift. */
 	private static JPanel buildRow(OfferSuggestion os)
 	{
 		final JPanel row = new JPanel();
@@ -193,16 +194,16 @@ class FlipFinderSyncPanel extends PluginPanel
 		row.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 		row.setBorder(BorderFactory.createCompoundBorder(
 			BorderFactory.createMatteBorder(0, 0, 1, 0, ColorScheme.DARK_GRAY_COLOR),
-			BorderFactory.createEmptyBorder(6, 6, 6, 6)));
+			BorderFactory.createEmptyBorder(9, 9, 9, 9)));
 		row.setAlignmentX(Component.LEFT_ALIGNMENT);
 
 		final boolean sell = os.sell;
 		final Suggestion s = os.suggestion;
 
-		final JLabel head = new JLabel(os.itemName + "  ·  " + (sell ? "SELL" : "BUY")
-			+ "   " + fmt(os.qtySold) + "/" + fmt(os.totalQty));
+		// Identity — item icon + name.
+		final JLabel head = new JLabel(os.itemName);
 		head.setForeground(Color.WHITE);
-		head.setFont(head.getFont().deriveFont(Font.BOLD, 12f));
+		head.setFont(FontManager.getDefaultBoldFont());
 		head.setAlignmentX(Component.LEFT_ALIGNMENT);
 		if (os.icon != null)
 		{
@@ -211,44 +212,33 @@ class FlipFinderSyncPanel extends PluginPanel
 		}
 		row.add(head);
 
+		// Status — side + progress.
+		row.add(Box.createVerticalStrut(4));
+		row.add(line((sell ? "SELL" : "BUY") + "   " + fmt(os.qtySold) + " / " + fmt(os.totalQty),
+			ColorScheme.LIGHT_GRAY_COLOR));
+
 		if (s == null)
 		{
-			row.add(bodyLabel("No model price available", ColorScheme.LIGHT_GRAY_COLOR));
-			row.setMaximumSize(new Dimension(Integer.MAX_VALUE, row.getPreferredSize().height));
+			row.add(Box.createVerticalStrut(4));
+			row.add(line("No model price yet", ColorScheme.LIGHT_GRAY_COLOR));
+			capHeight(row);
 			return row;
 		}
 
-		// Your price vs model + over/under delta.
+		// Pricing — your price vs the model, with the over/under delta.
 		final Integer suggested = sell ? s.suggestedSell : s.suggestedBuy;
 		if (suggested != null)
 		{
 			final long delta = os.offerPrice - suggested;
-			final String deltaText = delta == 0
-				? "at model"
-				: fmt(Math.abs(delta)) + (delta > 0 ? " over" : " under") + " model";
-			row.add(bodyLabel("You " + fmt(os.offerPrice) + "  ·  Model " + fmt(suggested)
-				+ "  (" + deltaText + ")", ColorScheme.LIGHT_GRAY_COLOR));
+			final String d = delta == 0
+				? ""
+				: "   (" + (delta > 0 ? "+" : "-") + fmt(Math.abs(delta)) + ")";
+			row.add(Box.createVerticalStrut(4));
+			row.add(line("You " + fmt(os.offerPrice) + "    Model " + fmt(suggested) + d,
+				ColorScheme.LIGHT_GRAY_COLOR));
 		}
 
-		// Margin per item + projected profit for the offer quantity.
-		if (s.netMargin != null)
-		{
-			final StringBuilder m = new StringBuilder("Margin " + fmt(s.netMargin) + "/ea");
-			if (!sell && s.suggestedSell != null)
-			{
-				final long tax = s.taxPerItem == null ? 0L : s.taxPerItem;
-				final long proj = ((long) s.suggestedSell - tax - os.offerPrice) * os.totalQty;
-				m.append("  ·  if sold at model ~").append(gpShort(proj));
-			}
-			else
-			{
-				m.append("  ·  cycle ~").append(gpShort(s.netMargin * (long) os.totalQty));
-			}
-			row.add(bodyLabel(m.toString(),
-				s.netMargin >= 0 ? ColorScheme.PROGRESS_COMPLETE_COLOR : ColorScheme.PROGRESS_ERROR_COLOR));
-		}
-
-		// Fill probability (at the user's price when known) + a rough ETA.
+		// Fill chance + rough ETA — the headline signal, traffic-light coloured.
 		final Double fp = sell
 			? (s.yourSellFillProb != null ? s.yourSellFillProb : s.sellFillProb)
 			: (s.yourBuyFillProb != null ? s.yourBuyFillProb : s.buyFillProb);
@@ -262,19 +252,35 @@ class FlipFinderSyncPanel extends PluginPanel
 			final Color c = pct >= 60
 				? ColorScheme.PROGRESS_COMPLETE_COLOR
 				: pct >= 35 ? ColorScheme.PROGRESS_INPROGRESS_COLOR : ColorScheme.PROGRESS_ERROR_COLOR;
-			row.add(bodyLabel("Fill " + pct + "%" + (pct < 35 ? " — unlikely" : "")
-				+ "  ·  ETA " + etaText(remaining, vol), c));
+			row.add(Box.createVerticalStrut(4));
+			row.add(line("Fill " + pct + "%    ETA " + etaText(remaining, vol), c));
 		}
 
-		// Stale / drift: market has moved versus the placed price.
+		// Economics — net margin per item + projected full-cycle profit. Muted,
+		// turning red only when the margin is negative.
+		if (s.netMargin != null)
+		{
+			row.add(Box.createVerticalStrut(4));
+			row.add(line(
+				fmt(s.netMargin) + "/ea    cycle ~" + gpShort(s.netMargin * (long) os.totalQty),
+				s.netMargin < 0 ? ColorScheme.PROGRESS_ERROR_COLOR : ColorScheme.LIGHT_GRAY_COLOR));
+		}
+
+		// Drift — market has moved off the placed price.
 		final String drift = driftMessage(os, s);
 		if (drift != null)
 		{
-			row.add(bodyLabel(drift, ColorScheme.PROGRESS_INPROGRESS_COLOR));
+			row.add(Box.createVerticalStrut(4));
+			row.add(line(drift, ColorScheme.PROGRESS_INPROGRESS_COLOR));
 		}
 
-		row.setMaximumSize(new Dimension(Integer.MAX_VALUE, row.getPreferredSize().height));
+		capHeight(row);
 		return row;
+	}
+
+	private static void capHeight(JPanel row)
+	{
+		row.setMaximumSize(new Dimension(Integer.MAX_VALUE, row.getPreferredSize().height));
 	}
 
 	/** A drift warning when the market has moved away from the placed price, else null. */
@@ -339,12 +345,12 @@ class FlipFinderSyncPanel extends PluginPanel
 		return "1d+";
 	}
 
-	private static JLabel bodyLabel(String text, Color color)
+	private static JLabel line(String text, Color color)
 	{
 		final JLabel l = new JLabel(text);
 		l.setForeground(color);
+		l.setFont(FontManager.getDefaultFont());
 		l.setAlignmentX(Component.LEFT_ALIGNMENT);
-		l.setFont(l.getFont().deriveFont(11f));
 		return l;
 	}
 
@@ -352,6 +358,7 @@ class FlipFinderSyncPanel extends PluginPanel
 	{
 		final JLabel l = new JLabel("<html>" + text + "</html>");
 		l.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		l.setFont(FontManager.getDefaultFont());
 		l.setAlignmentX(Component.LEFT_ALIGNMENT);
 		return l;
 	}

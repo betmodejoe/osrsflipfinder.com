@@ -290,13 +290,19 @@ public class FlipFinderSyncPlugin extends Plugin
 				return; // sells are reported only when units actually fill
 			}
 			// Sells are reported as deltas and FIFO-blended into open positions
-			// server-side. Deterministic id (cumulative sold) → re-observing the
-			// same fill after a relog re-derives the id and the server dedupes it.
+			// server-side. The dedupe id includes the offer PRICE alongside the
+			// cumulative sold count: it stays deterministic across relogs (the
+			// price is fixed for an offer's life, so a re-observed fill re-derives
+			// the same id and the server dedupes it) while distinguishing a
+			// re-listed offer in the same slot — without the price, the new offer's
+			// early counts collide with the old offer's and get dropped, corrupting
+			// the average across a cancel→re-price.
 			final String itemName = itemName(itemId);
 			final long spentDelta = Math.max(0, spent - prevSpent);
 			final long avgPrice = spentDelta / qtyDelta;
+			final long sellOfferPrice = offer.getPrice();
 			final String clientTxId =
-				accountHash + ":" + slot + ":sell:" + itemId + ":" + qtySold;
+				accountHash + ":" + slot + ":sell:" + itemId + ":" + sellOfferPrice + ":" + qtySold;
 			tx = GeSyncTx.sell(clientTxId, itemId, itemName, (int) qtyDelta, avgPrice, txAt);
 			summary = "sold " + itemName + " ×" + qtyDelta;
 		}
