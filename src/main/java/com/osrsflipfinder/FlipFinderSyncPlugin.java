@@ -436,7 +436,8 @@ public class FlipFinderSyncPlugin extends Plugin
 			{
 				continue;
 			}
-			snapshot.add(new OfferSuggestion(itemId, itemName(itemId), isSell(state),
+			snapshot.add(new OfferSuggestion(itemId, itemName(itemId),
+				itemManager.getImage(itemId), isSell(state),
 				offer.getPrice(), offer.getTotalQuantity(), offer.getQuantitySold(),
 				lastSuggestions.get(itemId)));
 			ids.add(itemId);
@@ -483,7 +484,7 @@ public class FlipFinderSyncPlugin extends Plugin
 					final List<OfferSuggestion> rows = new ArrayList<>(snapshot.size());
 					for (final OfferSuggestion s : snapshot)
 					{
-						rows.add(new OfferSuggestion(s.itemId, s.itemName, s.sell,
+						rows.add(new OfferSuggestion(s.itemId, s.itemName, s.icon, s.sell,
 							s.offerPrice, s.totalQty, s.qtySold, byItemId.get(s.itemId)));
 					}
 					panel.setSuggestions(rows);

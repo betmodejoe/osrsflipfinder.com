@@ -204,6 +204,11 @@ class FlipFinderSyncPanel extends PluginPanel
 		head.setForeground(Color.WHITE);
 		head.setFont(head.getFont().deriveFont(Font.BOLD, 12f));
 		head.setAlignmentX(Component.LEFT_ALIGNMENT);
+		if (os.icon != null)
+		{
+			head.setIconTextGap(6);
+			os.icon.addTo(head); // sets the icon and repaints once it finishes loading
+		}
 		row.add(head);
 
 		if (s == null)
